@@ -11,11 +11,12 @@ class PhpSpider {
 	private $crawler_delay;
 	private $page_expires;
 	private $init_queue_from_entry;
-	private $show_verbose;
+	static private $show_verbose;
 	private $curl_pool;
 	
 	public function __construct() {
-		$this->show_verbose = false;
+		xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
+		self::$show_verbose = false;
 		$this->exit_after_done = true;
 		$this->db = new PDO( 
 			'mysql:host=localhost;dbname=PhpSpider', 
@@ -37,6 +38,7 @@ class PhpSpider {
 			CURLOPT_HEADER=>FALSE,
 			CURLOPT_RETURNTRANSFER=>TRUE,
 			CURLOPT_FOLLOWLOCATION=>FALSE,
+			CURLOPT_DNS_USE_GLOBAL_CACHE=>FALSE,
 			#CURLOPT_VERBOSE=>TRUE,
 			CURLOPT_USERAGENT=>"Mozilla/5.0 (Windows; U; Windows NT 6.1; zh-CN;)"
 		);
@@ -57,6 +59,7 @@ class PhpSpider {
 		}
 		$this->curl_pool = null;
 		$this->db = null;
+		file_put_contents('profile.txt', print_r(xhprof_disable(), true));
 	}
 	
 	private function check_database() {
@@ -150,22 +153,21 @@ ____SQL;
 		return curl_init();
 	}
 	
-	private function verbose($msg) {
-		if ($this->show_verbose) {
-			echo $msg;
+	static private function verbose($msg) {
+		if (self::$show_verbose) {
+			echo $msg, chr(10);
 		}
 	}
 	
-	public function ShowVerbose($show) {
-		$this->show_verbose = ($show & TRUE);
-		$this->verbose("show_verbose {$this->show_verbose}\n");
+	static public function ShowVerbose($show) {
+		self::$show_verbose = ($show & TRUE);
 	}
 	
 	public function site_getid($domain) {
-		$sth = $this->db->prepare("SELECT id FROM `ps_site` WHERE `domain`=? LIMIT 1");
+		$sth = $this->db->prepare('SELECT id FROM `ps_site` WHERE `domain`=? LIMIT 1');
 		$sth->bindParam(1, $domain);
 		if ($sth->execute() === FALSE) {
-			echo __LINE__.":PDOStatement::errorInfo():\n";
+			echo __LINE__,':PDOStatement::errorInfo():',chr(10);
 			die(print_r($sth->errorInfo(), true));
 		}
 		$ids = $sth->fetchAll(PDO::FETCH_COLUMN, 0);
@@ -193,14 +195,14 @@ ____SQL;
 		$sth = null;
 		if ($rowCount > 0) {
 			$id = $this->db->lastInsertId();
-			$this->verbose("insert site $id $domain $stop $interest_url\n");
+			self::verbose("insert site $id $domain $stop $interest_url");
 			return $id;
 		}
 		return 0;
 	}
 
 	private function check_site() {
-		$sql = "select id,stop,interest_url from ps_site";
+		$sql = 'select id,stop,interest_url from ps_site';
 		$sth = $this->db->query($sql);
 		foreach ($sth->fetchAll() as $row) {
 			if ($row['stop']) {
@@ -232,8 +234,8 @@ ____SQL;
 	}
 	
 	public function getUrlInfo($uri) {
-		$sth = $this->db->prepare("SELECT id,TIMESTAMPDIFF(HOUR,update_time,CURRENT_TIMESTAMP) as hours,depth FROM `ps_urls` WHERE `umd5`=? LIMIT 1");
-		$sth->bindParam(1, md5($uri));
+		$sth = $this->db->prepare('SELECT id,TIMESTAMPDIFF(HOUR,update_time,CURRENT_TIMESTAMP) as hours,depth FROM `ps_urls` WHERE `umd5`=MD5(?) LIMIT 1');
+		$sth->bindParam(1, $uri);
 		if ($sth->execute() === FALSE) {
 			echo __LINE__.":PDOStatement::errorInfo():\n";
 			die(print_r($sth->errorInfo(), true));
@@ -248,35 +250,36 @@ ____SQL;
 	}
 
 	public function queue_copy_from_entry() {
+		#$sql = 'INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`refer_id`) SELECT 1,depth,uri,umd5,refer FROM `ps_urls`';
 		$sql = 'INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`) SELECT `site_id`,`depth`,`entry` as `uri`,md5(`entry`) as umd5 FROM `ps_entry`';
-		$this->db->exec($sql);
+		return $this->db->exec($sql);
 	}
 
 	private function queue_insert($rows) {
 		$rc = 0;
 		foreach($rows as $row) {
 			if ($row['depth'] < 0) {
-				$this->verbose("queueDB skip site:{$row['site_id']} depth:{$row['depth']} {$row['uri']}\n");
+				self::verbose("queueDB skip depth:{$row['depth']} {$row['uri']}");
 				continue;
 			}
 			$page_id = $this->check_need_recrawl($row['uri']);
 			if ($page_id !== TRUE) {
 				continue;
 			}
-			$sth = $this->db->prepare('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`refer_id`,`umd5`) VALUES(?,?,?,?,?,?)');
+			$sth = $this->db->prepare('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`refer_id`,`umd5`) VALUES(?,?,?,?,?,MD5(`uri`))');
 			$sth->bindParam(1, $row['site_id'], PDO::PARAM_INT);
 			$sth->bindParam(2, $row['depth'], PDO::PARAM_INT);
 			$sth->bindParam(3, $row['uri'], PDO::PARAM_STR);
 			$sth->bindParam(4, $row['refer'], PDO::PARAM_STR);
 			$sth->bindParam(5, $row['refer_id'], PDO::PARAM_INT);
-			$sth->bindParam(6, md5($row['uri']), PDO::PARAM_INT);
+			#$sth->bindParam(6, $row['uri']);
 			$sth->execute();
 			$rc1 = $sth->rowCount();
 			$sth->closeCursor();
 			$sth = null;
 			$rc += $rc1;
 			if ($rc1) {
-				$this->verbose("queueDB push site:{$row['site_id']} depth:{$row['depth']} {$row['uri']}\n");
+				self::verbose("queueDB push depth:{$row['depth']} {$row['uri']}");
 			}
 		}
 		return $rc;
@@ -299,17 +302,11 @@ ____SQL;
 	}
 	
 	public function setall_entry_depth($depth) {
-		$sth = $this->db->prepare('UPDATE `ps_entry` set depth=?');
-		$sth->bindParam(1, $depth, PDO::PARAM_INT);
-		$sth->execute();
-		$rc = $sth->rowCount();
-		$sth->closeCursor();
-		$sth = null;
-		return $rc;
+		return $this->db->exec('UPDATE `ps_entry` set depth='.intval($depth));
 	}
 	
 	private function check_need_recrawl($uri) {
-		if (!is_string($uri) || empty($uri)) {
+		if (empty($uri)) {
 			return FALSE;
 		}
 		$page_info = $this->getUrlInfo($uri);
@@ -318,15 +315,14 @@ ____SQL;
 		}
 		$page_id = $page_info['id'];
 		if ($page_info['hours'] > $this->page_expires) {
-			$this->verbose("uri expires\n");
 			return TRUE;
 		}
 		return $page_id;
 	}
 	
 	private function check_queue() {
+		$sql = 'select id,site_id,depth,refer_id,uri,refer from ps_queue order by id asc limit 500';
 		do {
-			$sql = "select id,site_id,depth,refer_id,uri,refer from ps_queue order by id asc limit 500";
 			$sth = $this->db->query($sql);
 			$rows = $sth->fetchAll();
 			$sth->closeCursor();
@@ -339,29 +335,30 @@ ____SQL;
 					$this->queue[$row['site_id']] = array('next_time'=>0,'queue'=>array());
 				}
 				$page_id = $this->check_need_recrawl($row['uri']);
+				if (is_numeric($page_id)) {
+					$source = $this->getPage($page_id);
+					if (!empty($source)) {
+						$this->remove_from_queue($row['id']);
+						$rc = $this->newUrlAddQueue($row['uri'], $source, $row['depth'], $row['site_id'], $page_id);
+						#self::verbose("reparse {$row['id']} {$rc} {$row['uri']}");
+					} else {
+						$page_id = TRUE;
+					}
+				}
 				if ($page_id === TRUE) {
 					if (!isset($this->queue[$row['site_id']]['queue'][$row['id']])) {
 						$this->queue[$row['site_id']]['queue'][$row['id']] = $row;
-						$this->queue_len++;
-						$this->verbose("push queue {$row['site_id']} {$row['id']} {$this->queue_len}\n");
+						++$this->queue_len;
+						self::verbose("push queue {$row['site_id']} {$row['id']} {$this->queue_len}");
 					}
-				} else if (is_numeric($page_id)) {
-					$source = $this->getPage($page_id);
-					$this->remove_from_queue($row['id']);
-					$this->parse_web($row['uri'], $source, $row['depth'], $row['site_id'], $page_id);
-					$this->verbose("reparse queueDB {$row['site_id']} {$row['id']} {$row['uri']}\n");
 				}
 			}
+			unset($rows);
 		} while ($this->queue_len < 1);
 	}
 	
 	private function remove_from_queue($id) {
-		$sth = $this->db->prepare('DELETE FROM `ps_queue` where `id`=?');
-		$sth->bindParam(1, $id, PDO::PARAM_INT);
-		$sth->execute();
-		$sth->closeCursor();
-		$sth = null;
-		$this->verbose("del queueDB $id\n");
+		return $this->db->exec('DELETE FROM `ps_queue` where `id`='.intval($id));
 	}
 	
 	private function savePage($uri, $src, $refer_id, $depth) {
@@ -386,17 +383,16 @@ ____SQL;
 			$sth->execute();
 			$sth->closeCursor();
 			$sth = null;
-			$this->verbose("update url $id $uri\n");
 			return $id;
 		}
 		return 0;
 	}
 	
-	private function getPage($page_id) {
-		$sth = $this->db->prepare("SELECT `source` FROM `ps_page` WHERE `id`=? LIMIT 1");
+	public function getPage($page_id) {
+		$sth = $this->db->prepare('SELECT `source` FROM `ps_page` WHERE `id`=? LIMIT 1');
 		$sth->bindParam(1, $page_id, PDO::PARAM_INT);
 		if ($sth->execute() === FALSE) {
-			echo __LINE__.":PDOStatement::errorInfo():\n";
+			echo __LINE__,':PDOStatement::errorInfo():',chr(10);
 			die(print_r($sth->errorInfo(), true));
 		}
 		$ids = $sth->fetchAll(PDO::FETCH_COLUMN, 0);
@@ -409,19 +405,15 @@ ____SQL;
 	}
 	
 	public static function parse_url($url, $base_url) {
-		$url = trim($url);
-		$base_url = trim($base_url);
-		$base = parse_url($base_url);
-		if (isset($base['scheme'])) {
-			if (!strcasecmp('javascript', $base['scheme'])) {
-				$base = FALSE;
-			}
+		$base = parse_url(trim($base_url));
+		if (isset($base['scheme']) && stripos($base['scheme'], 'script') != FALSE) {
+			$base = FALSE;
 		}
-		$target = parse_url($url);
+		$target = parse_url(trim($url));
 		if ($target === FALSE) {
 			return FALSE;
 		}
-		if (isset($target['scheme']) && !strcasecmp('javascript', $target['scheme'])) {
+		if (isset($target['scheme']) && stripos($target['scheme'], 'script') != FALSE) {
 			return FALSE;
 		}
 		if (!isset($target['host'])) {
@@ -437,45 +429,45 @@ ____SQL;
 		 * 3. /base  ../
 		 */
 		$obj = array();
-		if (isset($base['path']) && strlen($base['path'])) {
-			$base['path'] = preg_replace('|/{2,}|','/', $base['path']);
-			if (!isset($target['path'])) {
-				$target['path'] = $base['path'];
-			} else if (strlen($target['path']) < 1) {
+		if (isset($base['path'][0])) {
+			while (strpos($base['path'], '//') !== FALSE) {
+				$base['path'] = str_replace('//','/', $base['path']);
+			}
+			if (!isset($target['path'][0])) {
 				$target['path'] = $base['path'];
 			} else if ($target['path'][0] != '/') {
 				$len = strlen($base['path']);
 				if ($base['path'][$len-1] == '/') {
 					$target['path'] = $base['path'] . $target['path'];
 				} else {
-					$target['path'] = dirname($base['path']) . $target['path'];
+					$target['path'] = dirname($base['path']) .'/'. $target['path'];
 				}
 			}
 		}
-		if (!isset($target['path']) || strlen($target['path']) < 1) {
+		if (!isset($target['path'][0])) {
 			$target['path'] = '/';
 		}
 		$tpath = explode ("/", $target['path']);
 		$obj = array();
 		$last = array_pop($tpath);
 		foreach($tpath as $v) {
-			if (empty($v) || $v===".") {
-			} else if ($v === "..") {
+			if (empty($v) || $v=='.') {
+			} else if ($v == '..') {
 				array_pop($obj);
 			} else {
 				$obj[] = $v;
 			}
 		}
 		$isdir = true;
-		if (empty($last) || $last===".") {
-		} else if ($last === "..") {
+		if (empty($last) || $last=='.') {
+		} else if ($last == '..') {
 			array_pop($obj);
 		} else {
 			$obj[] = $last;
 			$isdir = false;
 		}
 		if ($isdir) {
-			if (count($obj) < 1) {
+			if (empty($obj)) {
 				$target['path'] = '/';
 			} else {
 				$target['path'] = '/' . implode ('/', $obj) . '/';
@@ -524,62 +516,115 @@ ____SQL;
 		return FALSE;
 	}
 	
-	private function parse_web($uri, $src, $depth, $site_id, $id) {
-		if ($depth < 1) {
-			return;
-		}
-		
-		$base = $uri;
+	public static function parse_web($base, $src) {
+		$space = array(' '=>true,"\r"=>true,"\n"=>true,"\t"=>true);
 		$queue = array();
-		while (($src=strstr($src, '<')) !== FALSE) {
-			if ($src[1] == '!') {
-				if ($src[2] == '-' && $src[3] == '-') {
-					$offset = strpos($src, '-->', 4);
+		$offset = 0;
+		while ($offset !== FALSE && ($offset=strpos($src, '<', $offset)) !== FALSE) {
+			++$offset;
+			switch($src[$offset]) {
+			case '!':
+				++$offset;
+				if ($src[$offset] == '-' && $src[($offset+1)] == '-') {
+					$offset = strpos($src, '-->', $offset+2);
 					if ($offset === FALSE) {
 						break;
-					} else {
-						$src = substr($src, ($offset+3));
 					}
-				} else {
-					$src = substr($src, 2);
+					$offset += 3;
 				}
-			} else {
-				$offset = strpos($src, '<', 1);
+				break;
+			case '/':
+				++$offset;
+				break;
+			default:
+				while(isset($space[$src[$offset]])){
+					++$offset;
+				}
+				$tag = FALSE;
+				switch ($src[$offset]) {
+				case 'a':case 'A':
+					++$offset;
+					if (isset($src[$offset]) && isset($space[$src[$offset]])) {
+						$tag = 'a';
+					}
+					break;
+				case 'b':case 'B':
+					++$offset;
+					if (isset($src[$offset+3]) && isset($space[$src[$offset+3]]) 
+					&& ($src[$offset] == 'a' || $src[$offset] == 'A')
+					&& ($src[$offset+1] == 's' || $src[$offset+1] == 'S')
+					&& ($src[$offset+2] == 'e' || $src[$offset+2] == 'E')) {
+						$tag = 'base';
+						$offset += 2;
+					}
+					break;
+				default:
+					break;
+				}
+				if ($tag === FALSE) {
+					break;
+				}
+				$begin = $offset;
+				$offset = strpos($src, '>', $offset);
 				if ($offset === FALSE) {
 					break;
 				}
-				$info = substr($src, 0, $offset);
-				$src = substr($src, $offset);
+				$info = substr($src, $begin, $offset-$begin);
+				++$offset;
 				
-				#html tag# #^<\s*([a-z]+)([^<]+)*(?:>\s*(.*)\s*</\1>|\s+/>)#
-				$href = '';
-				if (preg_match('#^<\s*(a|base)\s+[^>]*href\s*=\s*("|\')(.+)\2#iUs', $info, $m)) {
-					$tag = trim($m[1]);
-					$href = trim($m[3]);
-					if (!strcasecmp ($tag, "base")) {
-						$base = $this->toUrl($this->parse_url($href, $base), TRUE);
-					} else if (!strcasecmp ($tag, "a")) {
-						$href = $this->toUrl($this->parse_url($href, $base), TRUE);
-					} else {
-						$href = FALSE;
-					}
-				} else if (preg_match('#^<\s*(a|base)\s+[^>]*href\s*=\s*([^\s|>]+)[\s|>]{1}#iUs', $info, $m)) {
-					$tag = trim($m[1]);
-					$href = trim($m[2]);
-					if (!strcasecmp ($tag, "base")) {
-						$base = $this->toUrl($this->parse_url($href, $base), TRUE);
-					} else if (!strcasecmp ($tag, "a")) {
-						$href = $this->toUrl($this->parse_url($href, $base), TRUE);
-					} else {
-						$href = FALSE;
-					}
+				$begin = stripos($info, 'href');
+				if ($begin === FALSE || !isset($space[$info[$begin-1]])) {
+					break;
 				}
-				if ($href != FALSE && $this->is_interest_url($site_id, $href)) {
-					$queue[] = array('site_id'=>$site_id, 'uri'=>$href, 'refer'=>$uri, 'depth'=>($depth-1), 'refer_id'=>$id);
+				$begin += 4;
+				while (isset($info[$begin]) && (isset($space[$info[$begin]]) || $info[$begin]=='=')) {
+					++$begin;
+				}
+				if (!isset($info[$begin])) {
+					break;
+				}
+				$endchr = $info[$begin];
+				if ($endchr == '"' || $endchr == '\'') {
+					++$begin;
+					$end = $begin;
+					while (isset($info[$end]) && $info[$end] != $endchr) ++$end;
+					$href = substr($info, $begin, $end-$begin);
+				} else {
+					$end = $begin;
+					while (isset($info[$end]) && !isset($space[$info[$end]])) ++$end;
+					$href = substr($info, $begin, $end-$begin);
+				}
+				if ($tag == 'base') {
+					$base = self::toUrl(self::parse_url($href, $base), TRUE);
+				} else if ($tag == 'a') {
+					$href = self::toUrl(self::parse_url($href, $base), TRUE);
+					if ($href != FALSE) {
+						$queue[$href] = TRUE;
+					}
 				}
 			}
 		}
-		$this->queue_insert($queue);
+		return $queue;
+	}
+	
+	private function newUrlAddQueue($uri, $src, $depth, $site_id, $id) {
+		if ($depth < 1) {
+			return FALSE;
+		}
+		$urls = self::parse_web($uri, $src);
+		if (empty($urls)) {
+			return 0;
+		}
+		$queue = array();
+		foreach($urls as $url => $v) {
+			if ($this->is_interest_url($site_id, $url)) {
+				$queue[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>($depth-1), 'refer_id'=>$id);
+			}
+		}
+		if (!empty($queue)) {
+			return $this->queue_insert($queue);
+		}
+		return 0;
 	}
 	
 	public function setCrawlerDelay($delay) {
@@ -597,7 +642,7 @@ ____SQL;
 				$site['next_time'] = $cur_time + $this->crawler_delay;
 				$job = array_shift($site['queue']);
 				if ($job !== NULL) {
-					$this->queue_len--;
+					--$this->queue_len;
 				}
 				return $job;
 			}
@@ -618,7 +663,7 @@ ____SQL;
 		do {
 			// start a new request
 			if (!file_exists("phpspider.stop")) {
-				for(; $concurrent < $this->max_concurrent; $concurrent++){
+				for(; $concurrent < $this->max_concurrent; ++$concurrent){
 					$job = $this->getOneFromQueue();
 					if ($job === NULL) {
 						break;
@@ -652,11 +697,11 @@ ____SQL;
 							// request failed. 
 							$source = '';
 						}
-						$this->verbose("code:{$info['http_code']} url:{$info['url']} total:{$info['total_time']} redirect:{$info['redirect_count']}\n");
+						self::verbose("code:{$info['http_code']} url:{$info['url']} total:{$info['total_time']}");
 						$page_id = $this->savePage($jobs[$id]['uri'], $source, $jobs[$id]['refer_id'], $jobs[$id]['depth']);
 						$this->remove_from_queue($jobs[$id]['id']);
-						$this->parse_web($jobs[$id]['uri'], $source, $jobs[$id]['depth'], $jobs[$id]['site_id'], $page_id);
-						$concurrent--;
+						$this->newUrlAddQueue($jobs[$id]['uri'], $source, $jobs[$id]['depth'], $jobs[$id]['site_id'], $page_id);
+						--$concurrent;
 						
 						//Removes a given ch handle from the given mh handle. 
 						curl_multi_remove_handle($this->mh, $done['handle']);
@@ -680,7 +725,7 @@ ____SQL;
 			}
 			if ($this->queue_len < 1) {
 				if ($this->exit_after_done) {
-					$this->verbose("Done\n");
+					self::verbose("Done");
 					return;
 				}
 			}
@@ -689,9 +734,9 @@ ____SQL;
 			if ($status === FALSE) {
 				usleep(10000);
 			}
-			if (file_exists("phpspider.stop")) {
-				unlink("phpspider.stop");
-				$this->verbose("Exit because phpspider.stop\n");
+			if (file_exists('phpspider.stop')) {
+				unlink('phpspider.stop');
+				self::verbose('Exit because phpspider.stop');
 				return;
 			}
 		}
