@@ -5,7 +5,7 @@ class PhpSpiderSite {
 	
 	public function init_360buy() {
 		$spider = new PhpSpider;
-		$site_id = $spider->site_insert('www.360buy.com', 0, '#^http\://www\.360buy\.com/products?/.*\.html$#i');
+		$site_id = $spider->site_update('www.360buy.com', 0, '#^http\://www\.360buy\.com/product/\d+\.html$#i####^http\://www\.360buy\.com/products/\d+-\d+-\d+-0-0-0-0-0-0-0-1-1-\d+\.html$#i###^http://book\.360buy\.com/\d+\.html$#i');
 		echo "site_insert: $site_id \n";
 		if ($site_id > 0) {
 			$handle = fopen("../Config/categories_360buy.txt", "r");
@@ -37,8 +37,9 @@ class PhpSpiderSite {
 
 	public function run() {
 		$spider = new PhpSpider;
+		$spider->site_update('www.360buy.com', 0, '#^http\://www\.360buy\.com/product/\d+\.html$#i####^http\://www\.360buy\.com/products/\d+-\d+-\d+-0-0-0-0-0-0-0-1-1-\d+\.html$#i####^http://(book|mvd)\.360buy\.com/\d+\.html$#i');
 		$spider->setCrawlerDelay(0);
-		$spider->setConcurrent(10);
+		$spider->setConcurrent(4);
 		$spider->ShowVerbose(true);
 		#$spider->setall_entry_depth(99999999);
 		$spider->run();

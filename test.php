@@ -29,28 +29,42 @@ class TestPhpSpider {
 	}
 
 	public static function DEBUG_url_match($line, $expect) {
-		if (preg_match('#^<\s*(a|base)\s+[^>]*href\s*=\s*("|\')(.+)\2#iUs', $line, $m)) {
-			if (strcmp($expect, $m[3])) {
-				echo "1FAIL expect:", $expect, " != ", $m[3], chr(10), $line, chr(10);
+		if (preg_match('#^http\://www\.360buy\.com/product/\d+\.html$#i', $line)) {
+			if (!$expect) {
+				echo 'FAIL 1 expect false:', $line, chr(10);
 			} else {
-				echo "1OK ", $expect, chr(10);
+				echo 'OK 1 ', $line, chr(10);
 			}
-		} else if (preg_match('#^<\s*(a|base)\s+[^>]*href\s*=\s*([^\s|>]+)[\s|>]{1}#iUs', $line, $m)) {
-			if (strcmp($expect, $m[2])) {
-				echo "2FAIL expect:", $expect, " != ", $m[2], chr(10), $line, chr(10);
+		} else if (preg_match('#^http\://www\.360buy\.com/products/\d+-\d+-\d+-0-0-0-0-0-0-0-1-1-\d+\.html$#i', $line)) {
+			if (!$expect) {
+				echo 'FAIL 2 expect false:', $line, chr(10);
 			} else {
-				echo "2OK ", $expect, chr(10);
+				echo 'OK 2 ', $line, chr(10);
+			}
+		} else if (preg_match('#^http://(book|mvd)\.360buy\.com/\d+\.html$#i', $line)) {
+			if (!$expect) {
+				echo 'FAIL 2 expect false:', $line, chr(10);
+			} else {
+				echo 'OK 2 ', $line, chr(10);
+			}
+		} else {
+			if ($expect) {
+				echo 'FAIL, expect true, ', $line, chr(10);
+			} else {
+				echo 'OK FALSE ', $line, chr(10);
 			}
 		}
 	}
 
 	public static function TEST_url_match() {
-		self::DEBUG_url_match("<a href='http://www.google.com/'>", 'http://www.google.com/');
-		self::DEBUG_url_match("<a href= http://www.google.com/ title='google'>", 'http://www.google.com/');
-		self::DEBUG_url_match("<a href=http://www.google.com/ title='google'>", 'http://www.google.com/');
-		self::DEBUG_url_match("<a href=http://www.google.com/test test title='google'>", 'http://www.google.com/test');
-		self::DEBUG_url_match("<a href=http://www.google.com/>", 'http://www.google.com/');
-		self::DEBUG_url_match("<a href= http://www.google.com/>", 'http://www.google.com/');
+		self::DEBUG_url_match('http://www.360buy.com/products/670-729-2603-0-0-47906-0-0-0-0-1-1-1.html', false);
+		self::DEBUG_url_match('http://www.360buy.com/products/670-729-2603-10-0-47906-0-0-0-0-1-1-1.html', false);
+		self::DEBUG_url_match('http://www.360buy.com/products/670-729-2603-0-0-47906-0-0-0-0-1-1-1.html', false);
+		self::DEBUG_url_match('http://www.360buy.com/products/670-729-2603-0-0-0-0-0-0-0-1-1-1.html', true);
+		self::DEBUG_url_match('http://www.360buy.com/product/670.html', true);
+		self::DEBUG_url_match('http://www.360buy.com/products/670.html', false);
+		self::DEBUG_url_match('http://book.360buy.com/19008608.html', true);
+		self::DEBUG_url_match('http://mvd.360buy.com/20046857.html', true);
 	}
 	
 	public static function TEST_parse_web() {
@@ -62,13 +76,14 @@ class TestPhpSpider {
 	}
 
 	public static function TEST() {
-		self::TEST_url_match();
 		self::TEST_check_url();
-		self::TEST_parse_web();
+		self::TEST_url_match();
+		#self::TEST_parse_web();
 	}
 
 }
 
-$str = "/hello/";
-echo $str[-1], chr(10);
 TestPhpSpider::TEST();
+if (preg_match('/<h1>(.+)</Us', '<h1><果壳中的宇宙>导读 <span>', $m)) {
+	var_dump($m);
+}
