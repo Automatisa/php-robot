@@ -1,11 +1,11 @@
 <?php
-require_once "PhpSpider.php";
+require_once "PhpRobot.php";
 
-class TestPhpSpider {
+class TestPhpRobot {
 	
 	public static function DEBUG_check_url($expect, $url, $base) {
-		$u = PhpSpider::parse_url($url, $base);
-		$to = PhpSpider::toUrl($u);
+		$u = PhpRobot::parse_url($url, $base);
+		$to = PhpRobot::toUrl($u);
 		if (strcmp($expect, $to)) {
 			echo "FAIL expect:", $expect, " != ", $to, chr(10);
 		} else {
@@ -24,7 +24,17 @@ class TestPhpSpider {
 		self::DEBUG_check_url("http://www.google.cn/test/test2", "/test/test2", "http://www.google.cn/test2/");
 		self::DEBUG_check_url("http://www.google.cn/test/test2", "/test////test2", "http://www.google.cn///test2/");
 		self::DEBUG_check_url("http://www.google.cn/test/test2", "/test////test2", "http://www.google.cn////test2/");
+		self::DEBUG_check_url("http://www.google.cn/test2", "/test/../../../test2", "http://www.google.cn//..//test2/");
+		self::DEBUG_check_url("http://www.google.cn/test2", "/test/../../../test2", "http://www.google.cn/../../../test2/");
+		self::DEBUG_check_url("http://www.google.cn/test2", "/test/../../../test2", "http://www.google.cn/test2/../");
+		self::DEBUG_check_url("http://www.google.cn/test2", "..//test/.././../test2", "http://www.google.cn/test2/../");
+		self::DEBUG_check_url("http://www.google.cn/test2", "..//test/.././../test2", "http://www.google.cn/..");
 		self::DEBUG_check_url("http://www.google.cn/test/test2", "/test/test2", "http://www.google.cn/test2////");
+		self::DEBUG_check_url("http://www.g.cn/test2/www.baidu.com", "www.baidu.com", "http://www.g.cn/test2////");
+		self::DEBUG_check_url("http://www.g.cn/test2/?www.baidu.com", "?www.baidu.com", "http://www.g.cn/test2////");
+		self::DEBUG_check_url("http://www.g.cn/test/?www.baidu.com", "/test/?www.baidu.com", "http://www.g.cn/test2////");
+		self::DEBUG_check_url("http://www.baidu.com/", "http://www.baidu.com", "http://www.google.cn/test2////");
+		self::DEBUG_check_url("ftp://www.baidu.com/", "ftp://www.baidu.com", "http://www.google.cn/test2////");
 		self::DEBUG_check_url('http://www.360buy.com/products/737-794-798-0-0-0-0-0-0-0-1-1-3.html', '737-794-798-0-0-0-0-0-0-0-1-1-3.html', 'http://www.360buy.com/products/737-794-798.html');
 	}
 
@@ -69,9 +79,23 @@ class TestPhpSpider {
 	
 	public static function TEST_parse_web() {
 		$web = file_get_contents('test.html');
-		$urls = PhpSpider::parse_web('http://www.360buy.com/products/737-794-798.html', $web);
+		$urls = PhpRobot::parse_web('http://www.coo8.com/allcatalog/', $web);
 		foreach($urls as $url=>$v) {
 			echo $url,chr(10);
+		}
+	}
+	
+	public static function TEST_levenshtein() {
+		$web = file_get_contents('test.html');
+		$urls = array_keys(PhpRobot::parse_web('http://www.360buy.com/products/737-794-798.html', $web));
+		$c = count($urls);
+		$infos = array();
+		for ($i=0; $i<$c; ++$i) {
+			$infos[$i] = PhpRobot::urlDiffCount('http://www.360buy.com/products/737-794-798-0-0-0-0-0-0-0-1-1-1.html', $urls[$i]);
+		}
+		asort($infos, SORT_NUMERIC);
+		foreach ($infos as $i=>$v) {
+			echo $i, '=>', $urls[$i], ' :', $v, chr(10);
 		}
 	}
 
@@ -79,11 +103,9 @@ class TestPhpSpider {
 		self::TEST_check_url();
 		self::TEST_url_match();
 		#self::TEST_parse_web();
+		#self::TEST_levenshtein();
 	}
 
 }
 
-TestPhpSpider::TEST();
-if (preg_match('/<h1>(.+)</Us', '<h1><果壳中的宇宙>导读 <span>', $m)) {
-	var_dump($m);
-}
+TestPhpRobot::TEST();
