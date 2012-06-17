@@ -79,7 +79,7 @@ class TestPhpRobot {
 	
 	public static function TEST_parse_web() {
 		$web = file_get_contents('test.html');
-		$urls = PhpRobot::parse_web('http://www.coo8.com/allcatalog/', $web);
+		$urls = PhpRobot::parse_web('http://category.dangdang.com/all/?category_path=01.00.00.00.00.00', $web);
 		foreach($urls as $url=>$v) {
 			echo $url,chr(10);
 		}
@@ -102,10 +102,13 @@ class TestPhpRobot {
 	public static function TEST() {
 		self::TEST_check_url();
 		self::TEST_url_match();
-		#self::TEST_parse_web();
+		self::TEST_parse_web();
 		#self::TEST_levenshtein();
 	}
 
 }
 
 TestPhpRobot::TEST();
+
+$v = file_put_contents('data/test/test.html', 'hello');
+var_dump($v);

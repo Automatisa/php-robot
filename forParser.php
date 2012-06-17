@@ -8,7 +8,6 @@ require_once  APP_HOME . 'Library/Log.php';
 require_once  APP_HOME . 'Parser/Factory.php';
 
 class forParser {
-    private $_log;// 采集日志
 	private $db;
 	private $save_path;
 	private $base_id_file;
@@ -16,8 +15,6 @@ class forParser {
 	private $obj_info_re;
     public function __construct() {
 		$this->base_id_file = 'base_id';
-		$fname = '../log/parser.log';
-        $this->_log = new Library_Log($fname, true);
 		
 		$configfile = 'site.config';
 		if (!file_exists($configfile)) {
@@ -76,22 +73,30 @@ class forParser {
 		return file_get_contents($saveFullName);
 	}
 	
+	public function rmPage($page_id) {
+		$dirA = intval($page_id / 1000000);
+		$dirB = intval(($page_id % 1000000)/1000);
+		$savePath = $this->save_path . '/' . $dirA . '/' . $dirB;
+		$saveFullName = $savePath . '/' .$page_id.'.html';
+		return unlink($saveFullName);
+	}
+	
 	public function ParseLogFile() {
 		global $Parser;
 		$parsers = $Parser;
 		for ($hour=0; $hour<24; ++$hour) {
-			$cur_hour = intval((time() % 86400) / 3600);
-			if ($hour == $cur_hour) {
-				continue;
-			}
 			$fileName = $this->save_path . '/new.' . $hour;
 			if (file_exists($fileName)) {
 				$nFileName = $fileName.'.inp';
+				if (file_exists($nFileName)) {
+					continue;
+				}
 				rename($fileName, $nFileName);
 				$handle = fopen($nFileName, 'r');
 				if (!$handle) {
 					continue;
 				}
+				echo 'parsing ', $fileName, chr(10);
 				while ( !feof($handle) ) {
 					$id = intval(fgets($handle, 4096));
 					if ($id < 1) {
@@ -104,20 +109,22 @@ class forParser {
 					if (empty($rows)) {
 						continue;
 					}
-					foreach ($rows as $row) {
-						foreach ($parsers as $re=>$p) {
-							if (preg_match($re, $row['uri'])) {
-								$source = $this->getPage($id);
-								$productInfo = $p->parse($source, $row['uri']);
-								$p->saveInfo($productInfo, '../data/save/');
-								break;
-							}
+					$row = $rows[0];
+					echo 'parsing ', $id, ' ', $row['uri'], chr(10);
+					foreach ($parsers as $re=>$p) {
+						if (preg_match($re, $row['uri'])) {
+							$source = $this->getPage($id);
+							$productInfo = $p->parse($source, $row['uri']);
+							$p->saveInfo($productInfo, '../data/save/');
+							break;
 						}
 					}
+					$this->rmPage($id);
 					unset($rows);
 				}
 				fclose($handle);
 				unlink($nFileName);
+				break;
 			}
 			if (file_exists('parse.stop')) {
 				unlink('parse.stop');

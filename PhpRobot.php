@@ -19,19 +19,36 @@ class PhpRobot {
 	static private $cur_time;
 	static private $cur_hour;
 	
-	public function __construct($configfile = 'site.config') {
+	public function __construct($configfile = 'site.conf') {
 		//xhprof_enable(/*XHPROF_FLAGS_CPU +*/ XHPROF_FLAGS_MEMORY);
 		self::$cur_time = 0;
-		$this->queue = array();
-		$this->curl_pool = array();
-		$this->queue_len = 0;
+		$this->clear();
 		
 		$this->config = null;
 		$this->site_config = null;
 		$this->init_from_config ($configfile);
 	}
 	
-	private function init_from_config ($configfile = 'site.config') {
+	public function getConfig() {
+		return $this->config;
+	}
+	
+	private function clear() {
+		$this->queue = null;
+		if ($this->curl_pool != null) {
+			foreach($this->curl_pool as &$item) {
+				foreach($item as &$ch) {
+					curl_close($ch);
+				}
+			}
+		}
+		
+		$this->queue = array();
+		$this->queue_len = 0;
+		$this->curl_pool = array();
+	}
+	
+	private function init_from_config ($configfile) {
 		if (!file_exists($configfile)) {
 			echo __LINE__, ' config file no exists: ', $configfile;
 			die (chr(10));
@@ -87,7 +104,7 @@ class PhpRobot {
 		echo 'site_concurrent: ', $this->config->site_concurrent, chr(10);
 		
 		if (!isset($this->config->page_expires)) {
-			$this->config->page_expires = 99999999;
+			$this->config->page_expires = 24;
 		}
 		echo 'page_expires: ', $this->config->page_expires, chr(10);
 		
@@ -180,11 +197,14 @@ class PhpRobot {
 		$sql = <<<____SQL
 CREATE TABLE IF NOT EXISTS `ps_urls` (
  `id` INT NOT NULL AUTO_INCREMENT,
+ `site_id` INT NOT NULL DEFAULT '0',
  `uri` varchar(512) NOT NULL DEFAULT '',
+ `isinfo` TINYINT NOT NULL DEFAULT 0,
  `utime` INT NOT NULL DEFAULT 0,
  `umd5` varchar(32) NOT NULL,
  PRIMARY KEY (`id`),
- unique key (`umd5`)
+ unique key (`umd5`),
+ key (`site_id`)
  ) ENGINE=MyISAM;
 ____SQL;
 
@@ -194,6 +214,7 @@ CREATE TABLE IF NOT EXISTS `ps_queue` (
  `id` INT NOT NULL AUTO_INCREMENT,
  `site_id` INT NOT NULL DEFAULT '0',
  `depth` INT NOT NULL DEFAULT '0',
+ `isinfo` TINYINT NOT NULL DEFAULT 0,
  `umd5` varchar(32) NOT NULL,
  `uri` varchar(512) NOT NULL,
  `refer` varchar(512) NOT NULL,
@@ -308,6 +329,17 @@ ____SQL;
 		return $c[0][0];
 	}
 	
+	private function is_entry_url($site_id, $url) {
+		if (isset($this->site_config[$site_id]->entry)) {
+			foreach($this->site_config[$site_id]->entry as $entry) {
+				if (!strcmp($entry, $url)) {
+					return TRUE;
+				}
+			}
+		}
+		return FALSE;
+	}
+	
 	private function is_info_url($site_id, $url) {
 		if (isset($this->site_config[$site_id]->info_re)) {
 			foreach($this->site_config[$site_id]->info_re as $re) {
@@ -321,15 +353,25 @@ ____SQL;
 	
 	private function is_list_url($site_id, $url) {
 		if (isset($this->site_config[$site_id])) {
-			if (isset($this->site_config[$site_id]->list_re)) {
-				foreach($this->site_config[$site_id]->list_re as $re) {
-					if (preg_match($re, $url)) {
+			if (isset($this->site_config[$site_id]->domain_limit)) {
+				foreach($this->site_config[$site_id]->domain_limit as $domain) {
+					if (strpos($url, $domain) !== FALSE) {
+						if (isset($this->site_config[$site_id]->list_re)) {
+							foreach($this->site_config[$site_id]->list_re as $re) {
+								if (preg_match($re, $url)) {
+									return TRUE;
+								}
+							}
+							return FALSE;
+						}
 						return TRUE;
 					}
 				}
-			} else if (isset($this->site_config[$site_id]->domain_limit)) {
-				foreach($this->site_config[$site_id]->domain_limit as $domain) {
-					if (strpos($url, $domain) !== FALSE) {
+				return FALSE;
+			}
+			if (isset($this->site_config[$site_id]->list_re)) {
+				foreach($this->site_config[$site_id]->list_re as $re) {
+					if (preg_match($re, $url)) {
 						return TRUE;
 					}
 				}
@@ -376,12 +418,15 @@ ____SQL;
 		return $info;
 	}
 
-	public function queue_copy_from_entry() {
+	public function queue_copy_from_entry($site_id=FALSE) {
 		foreach ($this->config->site as $name=>$info) {
 			if (!isset($info->site_id)) {
 				die (__LINE__ .' Config site['.$name.'] no site id');
 			}
 			if (isset($info->stop) && $info->stop) {
+				continue;
+			}
+			if ($site_id !== FALSE && $site_id != $info->site_id) {
 				continue;
 			}
 			$depth = (isset($info->depth) ? $info->depth : 2);
@@ -390,43 +435,23 @@ ____SQL;
 			}
 		}
 		if (isset($entry)) {
-			$this->queue_insert($entry);
+			$this->queue_insert($entry, TRUE);
 			$entry = null;
 		}
 	}
 
-	public function prepare_update() {
-		$db = null;
-		try {
-			$db = new PDO($this->config->db_dsn, $this->config->db_username, $this->config->db_password);
-		} catch (PDOException $e) {
-			echo 'Connection failed: ', $e->getMessage();
-			die (chr(10));
-		}
-		
-		$sth = $db->prepare('select uri from ps_urls');
-		$sth->execute();
-		while ($row = $sth->fetch(PDO::FETCH_ASSOC)) {
-			foreach ($this->config->site as $name=>$info) {
-				if (!isset($info->site_id)) {
-					die (__LINE__ .' Config site['.$name.'] no site id');
-				}
-				if (isset($info->stop) && $info->stop) {
-					continue;
-				}
-				if (isset($info->info_re)) {
-					foreach($info->info_re as $re) {
-						if (preg_match($re, $row['uri'])) {
-							$this->queue_insert(array(array('site_id'=>$info->site_id, 'uri'=>$row['uri'], 'refer'=>'', 'depth'=>1)));
-							break;
-						}
-					}
-				}
+	public function prepare_update($site_id=FALSE) {
+		if ($site_id === FALSE) {
+			if ($this->db->exec('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE isinfo=1') === FALSE) {
+				die(print_r($this->db->errorInfo(), true));
 			}
-			$row = null;
+		} else {
+			$sql = 'INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE site_id=? AND isinfo=1';
+			$sth = $this->db->prepare($sql);
+			$sth->bindParam(1, $site_id, PDO::PARAM_INT);
+			$sth->execute();
+			$sth = null;
 		}
-		$sth = null;
-		$db = null;
 	}
 	
 	private function check_need_recrawl($uri) {
@@ -444,23 +469,30 @@ ____SQL;
 		return $page_id;
 	}
 	
-	private function queue_insert($rows) {
+	private function queue_insert($rows, $update = FALSE) {
 		$rc = 0;
-		$sth = $this->db->prepare('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`umd5`) VALUES(?,?,?,?,MD5(`uri`))');
+		$sth = $this->db->prepare('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`isinfo`,`umd5`) VALUES(?,?,?,?,?,MD5(`uri`));');
 		foreach($rows as $row) {
-			if (intval($row['depth']) < 0) {
-				continue;
+			if (!$update) {
+				if (intval($row['depth']) < 0) {
+					continue;
+				}
+
+				$page_id = $this->check_need_recrawl($row['uri']);
+				if ($page_id !== TRUE) {
+					continue;
+				}
 			}
-			
-			$page_id = $this->check_need_recrawl($row['uri']);
-			if ($page_id !== TRUE) {
-				continue;
-			}
-			
 			$sth->bindParam(1, $row['site_id'], PDO::PARAM_INT);
 			$sth->bindParam(2, $row['depth'], PDO::PARAM_INT);
 			$sth->bindParam(3, $row['uri']);
 			$sth->bindParam(4, $row['refer']);
+			if (isset($row['isinfo']) && $row['isinfo'] == 1) {
+				$sth->bindParam(5, $row['isinfo'], PDO::PARAM_INT);
+			} else {
+				$v = 0;
+				$sth->bindParam(5, $v, PDO::PARAM_INT);
+			}
 			$sth->execute();
 			$rc1 = $sth->rowCount();
 			$sth->closeCursor();
@@ -486,14 +518,17 @@ ____SQL;
 		return $dirA . '/' . $dirB;
 	}
 	
-	private function savePage($uri, $src) {
-		$sth = $this->db->prepare('INSERT INTO `ps_urls`(`uri`,`umd5`) VALUES(?,MD5(uri)) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), utime=UNIX_TIMESTAMP()');
+	private function savePage($uri, $src, $isinfo, $site_id) {
+		$sth = $this->db->prepare('INSERT INTO `ps_urls`(`uri`,`umd5`,`isinfo`,`site_id`) VALUES(?,MD5(uri),?,?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), utime=UNIX_TIMESTAMP(), isinfo=VALUES(isinfo), site_id=VALUES(site_id);');
 		$sth->bindParam(1, $uri);
+		$sth->bindParam(2, $isinfo);
+		$sth->bindParam(3, $site_id);
 		$sth->execute();
 		$rc = $sth->rowCount();
 		$sth = null;
 		if ($rc>0) {
 			$id = $this->db->lastInsertId();
+			if ($isinfo != 1) return $id;
 			$savePath = $this->config->save_path . '/' . self::getPagePath($id);
 			$saveFullName = $savePath . '/' .$id.'.html';
 			if (file_put_contents($saveFullName, $src) === FALSE) {
@@ -675,7 +710,7 @@ ____SQL;
 				$info = substr($src, $begin, $offset-$begin);
 				++$offset;
 				
-				# get href
+				// get href
 				$begin = stripos($info, 'href');
 				if ($begin === FALSE || !isset($space[$info[$begin-1]])) {
 					break;
@@ -698,9 +733,9 @@ ____SQL;
 					while (isset($info[$end]) && !isset($space[$info[$end]])) ++$end;
 					$href = substr($info, $begin, $end-$begin);
 				}
-				# end
+				// end
 				
-				# check nofollow
+				// check nofollow
 				$begin = 0;
 				$nofollow = FALSE;
 				do {
@@ -737,7 +772,7 @@ ____SQL;
 						}
 					}
 				}
-				# end
+				// end
 				
 				if ($tag == 'a') {
 					if ($nofollow) {
@@ -772,20 +807,26 @@ ____SQL;
 		if ($this->is_info_url($site_id, $uri)) {
 			foreach($urls as $url => $v) {
 				if ($this->is_info_url($site_id, $url)) {
-					$queue[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>($depth-1));
+					$queue[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>$depth, 'isinfo'=>1);
+				}
+			}
+			if (!$drop_query && isset($this->site_config[$site_id]->info_drop_query) && $this->site_config[$site_id]->info_drop_query) {
+				$c = count($queue);
+				for ($i=0; $i < $c; ++$i) {
+					$p = strpos($queue[$i]['uri'], '?');
+					if ($p !== FALSE) {
+						$queue[$i]['uri'] = substr($queue[$i]['uri'], 0, $p);
+					}
 				}
 			}
 			return $this->queue_insert($queue);
 		} else {
 			foreach($urls as $url => $v) {
 				if ($this->is_info_url($site_id, $url)) {
-					$queue[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>($depth-1));
+					$queue[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>$depth, 'isinfo'=>1);
 				} else if ($this->is_list_url($site_id, $url)) {
 					$list[] = array('site_id'=>$site_id, 'uri'=>$url, 'refer'=>$uri, 'depth'=>($depth-1));
 				}
-			}
-			if (empty($queue)) {
-				return 0;
 			}
 			$flist = $this->list_filter($list, $site_id, $uri);
 			if ($flist!== false) {
@@ -793,11 +834,22 @@ ____SQL;
 				$flist = null;
 			}
 
+			if (!$drop_query && isset($this->site_config[$site_id]->info_drop_query) && $this->site_config[$site_id]->info_drop_query) {
+				$c = count($queue);
+				for ($i=0; $i < $c; ++$i) {
+					$p = strpos($queue[$i]['uri'], '?');
+					if ($p !== FALSE) {
+						$queue[$i]['uri'] = substr($queue[$i]['uri'], 0, $p);
+					}
+				}
+			}
 			$num = $this->queue_insert($queue);
 			if ($num == 0) {
-				foreach ($list as &$u) {
-					if ($u['depth']>10) $u['depth']=9;
-					else $u['depth']=0;
+				if (!isset($this->site_config[$site_id]->depth) || $this->site_config[$site_id]->depth != $depth) {
+					foreach ($list as &$u) {
+						if ($u['depth']>20) $u['depth']=20;
+						else $u['depth']=0;
+					}
 				}
 			}
 			$num += $this->queue_insert($list);
@@ -826,29 +878,14 @@ ____SQL;
 			}
 			$need_requery = FALSE;
 			do {
-				$sql = 'select id,site_id,depth,uri,refer from ps_queue where site_id='.$info->site_id.' limit 100';
+				$sql = 'select id,site_id,depth,uri,refer,isinfo from ps_queue where site_id='.$info->site_id.' limit 100';
 				$rows = $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 				if (empty($rows)) {
 					$this->queue[$info->site_id]['db_nextQ'] = self::$cur_time + 1800;
+					$this->notice_done_site($info->site_id);
 					break;
 				}
 				foreach ($rows as $row) {
-				/*
-					$page_id = $this->check_need_recrawl($row['uri']);
-					if (is_numeric($page_id)) {
-						$source = $this->getPage($page_id);
-						if (!empty($source)) {
-							$this->remove_from_queue($row['id']);
-							$need_requery = TRUE;
-							$rc = $this->find_more_url($row['uri'], $source, $row['depth'], $row['site_id']);
-						} else {
-							$page_id = TRUE;
-						}
-					}
-					if ($page_id !== TRUE) {
-						continue;
-					}
-				*/
 					if (!isset($this->queue[$row['site_id']])) {
 						$this->queue[$row['site_id']] = array('next_time'=>0,'queue'=>array(),'run'=>0);
 					}
@@ -860,6 +897,13 @@ ____SQL;
 				}
 				unset($rows);
 			} while ($need_requery);
+		}
+	}
+	
+	private function notice_done_site($site_id) {
+		$f = $this->config->save_path . '/empty.' . $site_id;
+		if (!file_exists($f)) {
+			file_put_contents($f, self::$cur_time);
 		}
 	}
 	
@@ -877,12 +921,23 @@ ____SQL;
 			}
 			
 			if ($site['next_time'] < $cur_time) {
-				$job = array_shift($this->queue[$site_id]['queue']);
-				if ($job !== NULL) {
-					$this->queue[$site_id]['next_time'] = $cur_time + $this->site_config[$site_id]->crawler_delay;
-					--$this->queue_len;
-				}
-				return $job;
+				do {
+					$job = array_shift($this->queue[$site_id]['queue']);
+					if ($job !== NULL) {
+						--$this->queue_len;
+						if ($this->is_info_url($site_id, $job['uri'])) {
+							$job['isinfo'] = 1;
+						} else {
+							$job['isinfo'] = 0;
+							if (!$this->is_list_url($site_id, $job['uri']) && !$this->is_entry_url($site_id, $job['uri'])) {
+								$this->remove_from_queue($job['id']);
+								continue;
+							}
+						}
+						$this->queue[$site_id]['next_time'] = $cur_time + $this->site_config[$site_id]->crawler_delay;
+					}
+					return $job;
+				} while (true);
 			}
 		}
 		return NULL;
@@ -915,6 +970,11 @@ ____SQL;
 					$ch[$job['id']] = $this->curl_pop($job['site_id']);
 					$this->ch_options[CURLOPT_REFERER] = $job['refer'];
 					$this->ch_options[CURLOPT_URL] = $job['uri'];
+					if (isset($this->site_config[$job['site_id']]->autoredir)) {
+						$this->ch_options[CURLOPT_FOLLOWLOCATION] = TRUE;
+					} else {
+						$this->ch_options[CURLOPT_FOLLOWLOCATION] = FALSE;
+					}
 					curl_setopt_array($ch[$job['id']], $this->ch_options);
 					$rv = curl_multi_add_handle($mh, $ch[$job['id']]);
 					if ($rv == 0) {
@@ -946,10 +1006,10 @@ ____SQL;
 						// request failed. 
 						$source = '';
 					}
-					$page_id = $this->savePage($jobs[$id]['uri'], $source);
+					$page_id = $this->savePage($jobs[$id]['uri'], $source, $jobs[$id]['isinfo'], $jobs[$id]['site_id']);
 					$this->remove_from_queue($jobs[$id]['id']);
 					$n = $this->find_more_url($jobs[$id]['uri'], $source, $jobs[$id]['depth'], $jobs[$id]['site_id']);
-					self::verbose("ok:{$info['http_code']} {$info['total_time']} {$info['url']} {$n}");
+					self::verbose("{$info['http_code']} {$info['total_time']} {$this->queue[$jobs[$id]['site_id']]['run']} {$info['url']} {$n}");
 					--$concurrent;
 					--$this->queue[$jobs[$id]['site_id']]['run'];
 
@@ -974,6 +1034,7 @@ ____SQL;
 					self::verbose('Exit because spider.stop');
 					break;
 				}
+				$this->clear();
 				$this->check_queue();
 				if ($this->queue_len < 1) {
 					if ($this->config->exit_after_done) {
@@ -983,7 +1044,6 @@ ____SQL;
 						sleep($this->config->recrawl_sleep);
 						$this->db->exec('truncate ps_queue;');
 						$this->queue_copy_from_entry();
-						$this->prepare_update();
 					}
 				}
 			}
@@ -1012,6 +1072,17 @@ if (isset($argv[1])) {
 		$spider->run();
 	} else if ($argv[1] == 'update') {
 		$spider = new PhpRobot;
-		$spider->prepare_update();
+		if (isset($argv[2])) {
+			$spider->prepare_update($argv[2]);
+		} else {
+			$spider->prepare_update();
+		}
+	} else if ($argv[1] == 'entry') {
+		$spider = new PhpRobot;
+		if (isset($argv[2])) {
+			$spider->queue_copy_from_entry($argv[2]);
+		} else {
+			$spider->queue_copy_from_entry();
+		}
 	}
 }
