@@ -1,0 +1,69 @@
+7. site.js 格式说明
+site.js 必须为一个合格的js个是json文本，不可以包含注释，下面的注释仅为说明
+
+{
+	"max_concurrent":100, //整体最大并发数
+	"site_concurrent":4,  //每个站点最大并发数
+	"verbose":1,          //是否打印日志
+	"exit_after_done":0,  //整体抓取完后是否退出
+	"crawler_delay":0.02, //同一站点两次http请求间隔
+	"page_expires":24,    //页面重采时间间隔，单位小时
+	"recrawl_sleep":3600, //当exit_after_done为1时，采完后休息时间长度，单位秒
+	"db_dsn":"mysql:host=localhost;dbname=PhpSpider", //数据库信息
+	"db_username":"root", //数据库信息
+	"db_password":"",     //数据库信息
+	"useragent":"Mozilla/5.0 (Windows NT 6.1)", //useragent
+	"site":{
+		"360buy.com":{    //站点配置
+			"site_id":1,  //站点id，需要唯一，指定后不可以变动
+			"depth":999,  //采集深度
+			"list_re":[   // 列表页匹配规则
+				"#^http://www\\.360buy\\.com/products/\\d+-\\d+-\\d+\\.html$#i",
+				"#^http://www\\.360buy\\.com/products/\\d+-\\d+-\\d+-0-0-0-0-0-0-0-1-1-\\d+\\.html$#i"
+			],
+			"info_re":[   // 信息页匹配规则  必须项
+				"#^http://www\\.360buy\\.com/product/\\d+\\.html$#i",
+				"#^http://(?:book|mvd)\\.360buy\\.com/\\d+\\.html$#i"
+			],
+			"entry":[     // 采集入口
+				"http://www.360buy.com/allSort.aspx",
+				"http://www.360buy.com/book/booksort.aspx",
+				"http://mvd.360buy.com/mvdsort/4051.html",
+				"http://mvd.360buy.com/mvdsort/4052.html",
+				"http://mvd.360buy.com/mvdsort/4053.html"
+			],
+			"domain_limit":[ //列表页的url限制， 可选项， 但是list_re和domain_limit有一个必须存在
+				"www.360buy.com","mvd.360buy.com","book.360buy.com"
+			]
+		},
+		"mbaobao.com":{
+			"site_id":13,
+			"depth":999,
+			"info_drop_query":1, //自动丢弃信息页url的参数部分，info_re匹配后才进行丢弃处理
+			"drop_query":1,      // 自动丢弃所有url的参数部分 匹配前进行丢弃处理
+			"autoredir":1,       // 页面跟随重定向
+			"list_re":[
+				"#^http://list\\.mbaobao\\.com/list\\.html\\?ci=#i"
+			],
+			"info_re":[
+				"#^http://item\\.mbaobao\\.com/pshow-\\d+\\.html#i"
+			],
+			"entry":[
+				"http://www.mbaobao.com/"
+			]
+		},
+		"amazon.cn":{
+			"site_id":21,
+			"depth":999,
+			"info_re":[
+				"#^http://www\\.amazon\\.cn/[^/]+/dp/[^/]+$#i"
+			],
+			"robots":[   // 分析站点robots里面的sitemap，来得到信息页url 这里可以没有entry
+				"http://www.amazon.cn"
+			],
+			"domain_limit":[
+				"www.amazon.cn"
+			]
+		}
+	}
+}

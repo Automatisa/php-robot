@@ -19,7 +19,7 @@ class PhpRobot {
 	static private $cur_time;
 	static private $cur_hour;
 	
-	public function __construct($configfile = 'site.conf') {
+	public function __construct($configfile = 'site.js') {
 		//xhprof_enable(/*XHPROF_FLAGS_CPU +*/ XHPROF_FLAGS_MEMORY);
 		self::$cur_time = 0;
 		$this->clear();
@@ -104,7 +104,7 @@ class PhpRobot {
 		echo 'site_concurrent: ', $this->config->site_concurrent, chr(10);
 		
 		if (!isset($this->config->page_expires)) {
-			$this->config->page_expires = 24;
+			$this->config->page_expires = 72;
 		}
 		echo 'page_expires: ', $this->config->page_expires, chr(10);
 		
@@ -403,7 +403,7 @@ ____SQL;
 		return false;
 	}
 	
-	public function getUrlInfo($uri) {
+	private function getUrlInfo($uri) {
 		$sth = $this->db->prepare('SELECT id,UNIX_TIMESTAMP()-utime as utime FROM `ps_urls` WHERE `umd5`=MD5(?) LIMIT 1');
 		$sth->bindParam(1, $uri);
 		if ($sth->execute() === FALSE) {
@@ -417,7 +417,69 @@ ____SQL;
 		}
 		return $info;
 	}
+	
+	private static function getHttpFileContent($url, $retry=0) {
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $url);
+		curl_setopt($ch, CURLOPT_HTTPHEADER, array('Accept-Encoding: gzip,deflate'));
+		curl_setopt($ch, CURLOPT_ENCODING, TRUE);
+		curl_setopt($ch, CURLOPT_HEADER, FALSE);
+		curl_setopt($ch, CURLOPT_AUTOREFERER, TRUE);
+		curl_setopt($ch, CURLOPT_FOLLOWLOCATION, FALSE);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+		curl_setopt($ch, CURLOPT_USERAGENT, "Robot(kolja)");
+		do {
+			$data = curl_exec($ch);
+			if ($data !== FALSE) {
+				break;
+			}
+			--$retry;
+		} while($retry > 0);
+		curl_close($ch);
+		return $data;
+	}
+	
+	private function parse_sitemap($site_id, $url) {
+		$content = self::getHttpFileContent($url, 3);
+		if ($content === FALSE) {
+			return;
+		}
+		$c = preg_match_all('#<url>(.+)</url>#iUms', $content, $url);
+		for($i=0; $i<$c; ++$i) {
+			if (preg_match('#<loc>(http[^<]+)</loc>#iUms', $url[1][$i], $loc)) {
+				if ($this->is_info_url($site_id, $loc[1])) {
+					self::verbose('find info: '.$loc[1]);
+					$this->queue_insert(array(array('site_id'=>$site_id, 'uri'=>$loc[1], 'refer'=>'', 'depth'=>1, 'isinfo'=>1)), TRUE);
+				}
+			}
+		}
+		unset($url);
+		$c = preg_match_all('#<sitemap>(.+)</sitemap>#iUms', $content, $sitemap);
+		for($i=0; $i<$c; ++$i) {
+			if (preg_match('#<loc>(http[^<]+)</loc>#iUms', $sitemap[1][$i], $loc)) {
+				self::verbose('find sitemap: '.$loc[1]);
+				self::parse_sitemap($site_id, $loc[1]);
+			}
+		}
+		unset($sitemap);
+	}
 
+	private function parse_robots($site_id) {
+		if (isset($this->site_config[$site_id]->robots)) {
+			foreach($this->site_config[$site_id]->robots as $robots) {
+				$content = self::getHttpFileContent($robots.'/robots.txt', 3);
+				if ($content === FALSE) {
+					continue;
+				}
+				$c = preg_match_all('#Sitemap:\s*(http[^\s]+)$#iUms', $content, $sitemap);
+				for($i=0; $i<$c; ++$i) {
+					self::verbose('find Sitemap: '.$sitemap[1][$i]);
+					self::parse_sitemap($site_id, $sitemap[1][$i]);
+				}
+			}
+		}
+	}
+	
 	public function queue_copy_from_entry($site_id=FALSE) {
 		foreach ($this->config->site as $name=>$info) {
 			if (!isset($info->site_id)) {
@@ -430,23 +492,27 @@ ____SQL;
 				continue;
 			}
 			$depth = (isset($info->depth) ? $info->depth : 2);
-			if (isset($info->entry)) foreach ($info->entry as $url) {
-				$entry[] = array('site_id'=>$info->site_id, 'uri'=>$url, 'refer'=>'', 'depth'=>$depth);
+			if (isset($info->entry)) {
+				foreach ($info->entry as $url) {
+					$entry[] = array('site_id'=>$info->site_id, 'uri'=>$url, 'refer'=>'', 'depth'=>$depth);
+				}
+				if (isset($entry)) {
+					$this->queue_insert($entry, TRUE);
+					$entry = null;
+				}
 			}
-		}
-		if (isset($entry)) {
-			$this->queue_insert($entry, TRUE);
-			$entry = null;
+			$this->parse_robots($info->site_id);
 		}
 	}
 
 	public function prepare_update($site_id=FALSE) {
 		if ($site_id === FALSE) {
-			if ($this->db->exec('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE isinfo=1') === FALSE) {
+			if ($this->db->exec('INSERT IGNORE INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE isinfo=1') === FALSE) {
 				die(print_r($this->db->errorInfo(), true));
 			}
+			$this->db->exec('truncate ps_urls;');
 		} else {
-			$sql = 'INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE site_id=? AND isinfo=1';
+			$sql = 'INSERT IGNORE INTO `ps_queue`(`site_id`,`depth`,`uri`,`umd5`,`isinfo`) SELECT site_id,1,uri,umd5,1 FROM ps_urls WHERE site_id=? AND isinfo=1';
 			$sth = $this->db->prepare($sql);
 			$sth->bindParam(1, $site_id, PDO::PARAM_INT);
 			$sth->execute();
@@ -471,28 +537,27 @@ ____SQL;
 	
 	private function queue_insert($rows, $update = FALSE) {
 		$rc = 0;
-		$sth = $this->db->prepare('INSERT INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`isinfo`,`umd5`) VALUES(?,?,?,?,?,MD5(`uri`));');
+		$sth = $this->db->prepare('INSERT IGNORE INTO `ps_queue`(`site_id`,`depth`,`uri`,`refer`,`isinfo`,`umd5`) VALUES(?,?,?,?,?,MD5(`uri`));');
 		foreach($rows as $row) {
+			if (intval($row['depth']) < 1) {
+				continue;
+			}
 			if (!$update) {
-				if (intval($row['depth']) < 0) {
-					continue;
-				}
-
 				$page_id = $this->check_need_recrawl($row['uri']);
 				if ($page_id !== TRUE) {
 					continue;
 				}
 			}
-			$sth->bindParam(1, $row['site_id'], PDO::PARAM_INT);
-			$sth->bindParam(2, $row['depth'], PDO::PARAM_INT);
-			$sth->bindParam(3, $row['uri']);
-			$sth->bindParam(4, $row['refer']);
 			if (isset($row['isinfo']) && $row['isinfo'] == 1) {
 				$sth->bindParam(5, $row['isinfo'], PDO::PARAM_INT);
 			} else {
 				$v = 0;
 				$sth->bindParam(5, $v, PDO::PARAM_INT);
 			}
+			$sth->bindParam(1, $row['site_id'], PDO::PARAM_INT);
+			$sth->bindParam(2, $row['depth'], PDO::PARAM_INT);
+			$sth->bindParam(3, $row['uri']);
+			$sth->bindParam(4, $row['refer']);
 			$sth->execute();
 			$rc1 = $sth->rowCount();
 			$sth->closeCursor();
@@ -505,11 +570,7 @@ ____SQL;
 	}
 	
 	private function remove_from_queue($id) {
-		$id = intval($id);
-		if ($id < 1) {
-			return FALSE;
-		}
-		$this->db->exec('DELETE FROM `ps_queue` where `id`='.$id);
+		$this->db->exec('DELETE QUICK FROM `ps_queue` where `id`='.intval($id));
 	}
 	
 	public static function getPagePath($page_id) {
@@ -1037,12 +1098,12 @@ ____SQL;
 				$this->clear();
 				$this->check_queue();
 				if ($this->queue_len < 1) {
+					$this->db->exec('truncate ps_queue;');
 					if ($this->config->exit_after_done) {
 						self::verbose("Done");
 						break;
 					} else {
 						sleep($this->config->recrawl_sleep);
-						$this->db->exec('truncate ps_queue;');
 						$this->queue_copy_from_entry();
 					}
 				}

@@ -1,0 +1,26 @@
+3.系统日常使用常见问题及解决方法 
+
+启动
+	nohup ./Spider/forp.sh >/dev/null 2>&1 &
+	nohup ./DbImporter/DBI.new.daemon.sh >/dev/null 2>&1 &
+	nohup ./Spider/spider.sh >/dev/null 2>&1 &
+	
+暂停
+	cd /path/to/Spider
+	>spider.stop
+	
+完全停止
+	killall forp.sh
+	killall DBI.new.daemon.sh
+	killall spider.sh
+
+修改配置：
+	修改 ./Spider/site.js 时，要确保它是一个合乎规则的js文件，如果有格式错误的话，采集会立即退出。
+	修改完后，用暂停的方法，做一次暂停操作，若干秒后会自动重启，配置将生效。
+	
+查看日志：
+	../log/
+	../log/spider.log				采集日志
+	../log/DBI.newdata.log			入库日志
+	../log/update.log				更新日志
+	../log/parser.log				分析日志

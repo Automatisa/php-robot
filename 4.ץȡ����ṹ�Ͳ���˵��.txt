@@ -1,29 +1,4 @@
-Hi!
-
-So what is this? It is a robot written in PHP for crawl web pages.
-The program can only be executed from the command line. 
-You need do some configuration manually.
-
-You will need php-curl pdo and mysql in order to run this program,
-rename demo.site.config as site.config, rewrite it for your project.
-
-There are two operations to control its running.
-
--run:
-php PhpRobot.php standalone
-
--stop:
-touch spider.stop
-(you should wait for a moment.)
-
-I hope the phprobot can be helpful for you.
-
-If you have some questions, please contact me.
-
-Cheers,
-  -DJ Xu
-
-抓取代码结构和部署说明
+4.抓取代码结构和部署说明
 
 代码结构
 
